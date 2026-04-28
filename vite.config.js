@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
     // Proxy /gas → Apps Script /exec to dodge browser CORS/redirect quirks in dev.
     const targetPath = target ? extractPath(target) : '';
     return {
+        base: '/task-management/',
         plugins: [react()],
         server: {
             port: 5173,
