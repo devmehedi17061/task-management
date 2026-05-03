@@ -2,10 +2,14 @@
 
 A fast Vite + React + TypeScript + Tailwind app that turns your Google Sheet into a task tracker with a filterable table view, a drag-and-drop Kanban board, and a dropdowns manager. Backed by a small Apps Script Web App that talks to the sheet directly.
 
+**Database (Google Sheet):** https://docs.google.com/spreadsheets/d/1CXjabXedktYGcTPbKB-BGspeRXNOvML6u3wBeqln8VE/edit
+
+The Apps Script backend is pinned to that sheet via the `SHEET_ID` constant at the top of [`apps-script/Code.gs`](./apps-script/Code.gs). To swap in a different sheet, change `SHEET_ID` and redeploy.
+
 ## Quick start
 
 ```bash
-# 1. Deploy the Apps Script backend
+# 1. Deploy the Apps Script backend against the sheet above.
 #    See ./apps-script/README.md for full steps.
 #    Copy the /exec URL when you're done.
 

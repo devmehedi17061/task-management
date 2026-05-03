@@ -15,7 +15,10 @@ export function useBootstrap() {
   return useQuery({
     queryKey: BOOTSTRAP_KEY,
     queryFn: api.bootstrap,
-    staleTime: 30_000,
+    // Short stale time + window-focus refetch keeps the UI in sync with rows
+    // added/edited/deleted directly inside the Google Sheet.
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -26,6 +29,14 @@ function patchCache(
   qc.setQueryData<BootstrapResponse>(BOOTSTRAP_KEY, (prev) => (prev ? updater(prev) : prev));
 }
 
+// Whenever a mutation finishes (success OR error), we kick off a fresh
+// bootstrap fetch so the UI re-syncs with the Google Sheet. This catches
+// rows that were added/edited/deleted directly in the sheet, and recovers
+// from "not found"-style mismatches without dropping into local mode.
+const resync = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: BOOTSTRAP_KEY });
+};
+
 export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation({
@@ -33,6 +44,7 @@ export function useCreateTask() {
     onSuccess: (task) => {
       patchCache(qc, (data) => ({ ...data, tasks: [...data.tasks, task] }));
     },
+    onSettled: () => resync(qc),
   });
 }
 
@@ -47,6 +59,7 @@ export function useUpdateTask() {
         tasks: data.tasks.map((t) => (t.id === task.id ? task : t)),
       }));
     },
+    onSettled: () => resync(qc),
   });
 }
 
@@ -67,6 +80,7 @@ export function useUpdateStatus() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(BOOTSTRAP_KEY, ctx.prev);
     },
+    onSettled: () => resync(qc),
   });
 }
 
@@ -86,6 +100,7 @@ export function useDeleteTask() {
     onError: (_err, _id, ctx) => {
       if (ctx?.prev) qc.setQueryData(BOOTSTRAP_KEY, ctx.prev);
     },
+    onSettled: () => resync(qc),
   });
 }
 
@@ -100,6 +115,7 @@ export function useAddDropdown() {
         [vars.kind]: [...(data[vars.kind] as DropdownItem[]), item],
       }));
     },
+    onSettled: () => resync(qc),
   });
 }
 
@@ -120,6 +136,7 @@ export function useDeleteDropdown() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(BOOTSTRAP_KEY, ctx.prev);
     },
+    onSettled: () => resync(qc),
   });
 }
 

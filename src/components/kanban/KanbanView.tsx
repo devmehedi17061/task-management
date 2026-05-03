@@ -10,6 +10,7 @@ import {
 import { Plus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Button } from '../ui/Button';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { TaskFormModal } from '../tasks/TaskFormModal';
 import { TaskDetailModal } from '../tasks/TaskDetailModal';
 import { KanbanColumn } from './KanbanColumn';
@@ -41,6 +42,7 @@ export function KanbanView({ tasks, projects, labels, users }: Props) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const [defaultStatus, setDefaultStatus] = useState<Status>('To Do');
+  const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -113,10 +115,17 @@ export function KanbanView({ tasks, projects, labels, users }: Props) {
   };
 
   const handleDelete = (task: Task) => {
-    if (window.confirm(`Delete "${task.title}"? This cannot be undone.`)) {
-      deleteMutation.mutate(task.id);
-      setDetailOpen(false);
-    }
+    setPendingDelete(task);
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    deleteMutation.mutate(pendingDelete.id, {
+      onSettled: () => {
+        setPendingDelete(null);
+        setDetailOpen(false);
+      },
+    });
   };
 
   const handleChangeStatus = (task: Task, status: Status) => {
@@ -179,6 +188,24 @@ export function KanbanView({ tasks, projects, labels, users }: Props) {
         onEdit={openEdit}
         onDelete={handleDelete}
         onChangeStatus={handleChangeStatus}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete task?"
+        message={
+          pendingDelete ? (
+            <>
+              Are you sure you want to delete{' '}
+              <span className="font-semibold text-slate-900">“{pendingDelete.title}”</span>? This
+              cannot be undone.
+            </>
+          ) : null
+        }
+        confirmLabel="Delete task"
+        loading={deleteMutation.isPending}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </div>
   );

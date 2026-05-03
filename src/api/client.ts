@@ -54,37 +54,67 @@ function endpoint(): string {
   return ENDPOINT;
 }
 
+// Transport errors mean we couldn't reach Apps Script at all (network down,
+// auth wall, redirect to sign-in, malformed response). Falling back to local
+// mode is the right move.
+//
+// Remote app errors mean the server responded but rejected this specific
+// operation (e.g. "Task not found"). The connection is healthy — we should
+// surface the error to the caller and resync, NOT switch to local mode.
+class TransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransportError';
+  }
+}
+
+class RemoteAppError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RemoteAppError';
+  }
+}
+
 async function parseResponse<T>(res: Response): Promise<T> {
   const text = await res.text();
   const trimmed = text.trim();
   if (trimmed.startsWith('<')) {
-    throw new Error(
+    throw new TransportError(
       'Apps Script returned an HTML page instead of JSON. The deployment likely requires sign-in (Who has access ≠ Anyone), or the script has not been authorized.',
     );
   }
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  if (!res.ok) throw new TransportError(`Request failed: ${res.status}`);
   let json: unknown;
   try {
     json = JSON.parse(text);
   } catch {
-    throw new Error(`Could not parse response as JSON: ${trimmed.slice(0, 120)}`);
+    throw new TransportError(`Could not parse response as JSON: ${trimmed.slice(0, 120)}`);
   }
   if (json && typeof json === 'object' && 'error' in json && (json as { error?: string }).error) {
-    throw new Error(String((json as { error: string }).error));
+    throw new RemoteAppError(String((json as { error: string }).error));
   }
   return json as T;
+}
+
+async function fetchOrTransportError(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    // fetch only rejects on network-level failures (offline, DNS, CORS).
+    throw new TransportError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 async function getJson<T>(params: Record<string, string>): Promise<T> {
   const url = new URL(endpoint(), window.location.origin);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' });
+  const res = await fetchOrTransportError(url.toString(), { method: 'GET', redirect: 'follow' });
   return parseResponse<T>(res);
 }
 
 async function postJson<T>(body: Record<string, unknown>): Promise<T> {
   const url = new URL(endpoint(), window.location.origin).toString();
-  const res = await fetch(url, {
+  const res = await fetchOrTransportError(url, {
     method: 'POST',
     redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -120,6 +150,13 @@ async function withFallback<T>(
     if (currentMode !== 'remote') setMode('remote');
     return result;
   } catch (err) {
+    // App-level errors (e.g. validation, "not found") mean the sheet is
+    // reachable — surface them to the caller instead of silently falling
+    // back to local mode. The caller (a TanStack Query mutation) can then
+    // refetch to resync the cache with the actual sheet state.
+    if (err instanceof RemoteAppError) {
+      throw err;
+    }
     const reason = err instanceof Error ? err.message : String(err);
     setMode('local', reason);
     return local();

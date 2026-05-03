@@ -2,6 +2,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import clsx from 'clsx';
 import { Button } from '../ui/Button';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import {
   useAddDropdown,
   useDeleteDropdown,
@@ -23,6 +24,7 @@ const TABS: { key: DropdownKind; label: string }[] = [
 export function DropdownsView({ projects, labels, users }: Props) {
   const [tab, setTab] = useState<DropdownKind>('projects');
   const [name, setName] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<DropdownItem | null>(null);
 
   const addMutation = useAddDropdown();
   const deleteMutation = useDeleteDropdown();
@@ -37,10 +39,18 @@ export function DropdownsView({ projects, labels, users }: Props) {
   };
 
   const handleDelete = (item: DropdownItem) => {
-    if (window.confirm(`Remove "${item.name}"?`)) {
-      deleteMutation.mutate({ kind: tab, id: item.id });
-    }
+    setPendingDelete(item);
   };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    deleteMutation.mutate(
+      { kind: tab, id: pendingDelete.id },
+      { onSettled: () => setPendingDelete(null) },
+    );
+  };
+
+  const tabSingular = tab.slice(0, -1);
 
   return (
     <div className="flex flex-col gap-3">
@@ -100,6 +110,25 @@ export function DropdownsView({ projects, labels, users }: Props) {
           ))}
         </ul>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={`Remove ${tabSingular}?`}
+        message={
+          pendingDelete ? (
+            <>
+              Remove{' '}
+              <span className="font-semibold text-slate-900">“{pendingDelete.name}”</span> from{' '}
+              {tab}? Existing tasks that reference it will keep the value, but it won't appear in
+              the picker anymore.
+            </>
+          ) : null
+        }
+        confirmLabel="Remove"
+        loading={deleteMutation.isPending}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

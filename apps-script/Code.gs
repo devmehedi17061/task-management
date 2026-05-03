@@ -8,6 +8,15 @@
  * Copy the /exec URL into the React app's .env.local as VITE_APPS_SCRIPT_URL.
  */
 
+// Pin the backend to this specific Google Sheet so the script works whether
+// it is deployed standalone or bound to a spreadsheet.
+// https://docs.google.com/spreadsheets/d/1CXjabXedktYGcTPbKB-BGspeRXNOvML6u3wBeqln8VE/edit
+const SHEET_ID = '1CXjabXedktYGcTPbKB-BGspeRXNOvML6u3wBeqln8VE';
+
+function ss_() {
+  return SpreadsheetApp.openById(SHEET_ID);
+}
+
 const SHEETS = {
   tasks: 'TaskManagement',
   projects: 'DD_Projects',
@@ -33,10 +42,25 @@ function doGet(e) {
   try {
     const action = (e && e.parameter && e.parameter.action) || 'bootstrap';
     if (action === 'bootstrap') return jsonOut_(bootstrap_());
+    if (action === 'info')      return jsonOut_(info_());
     return jsonOut_({ error: 'Unknown GET action: ' + action });
   } catch (err) {
     return jsonOut_({ error: String(err && err.message || err) });
   }
+}
+
+// Diagnostic: returns the spreadsheet this deployment is actually writing to.
+// Hit <your /exec URL>?action=info in a browser to confirm SHEET_ID is pinned
+// to the sheet you expect.
+function info_() {
+  const ss = ss_();
+  return {
+    sheetId: SHEET_ID,
+    spreadsheetName: ss.getName(),
+    spreadsheetUrl: ss.getUrl(),
+    sheets: ss.getSheets().map(function (sh) { return sh.getName(); }),
+    deployedAt: new Date().toISOString(),
+  };
 }
 
 function doPost(e) {
@@ -118,7 +142,10 @@ function updateStatus_(id, status) {
 
 function deleteTask_(id) {
   const { sheet, rowIndex } = findRow_(SHEETS.tasks, TASK_HEADERS, id);
-  if (rowIndex < 0) throw new Error('Task not found: ' + id);
+  // Idempotent: if the row is already gone (e.g. removed directly in the
+  // sheet) there's nothing to do — return success so the client doesn't
+  // surface a "not found" error and fall back to local mode.
+  if (rowIndex < 0) return true;
   sheet.deleteRow(rowIndex);
   return true;
 }
@@ -138,7 +165,7 @@ function deleteDropdown_(kind, id) {
   const sheetName = SHEETS[kind];
   if (!sheetName) throw new Error('Unknown dropdown kind: ' + kind);
   const { sheet, rowIndex } = findRow_(sheetName, DROPDOWN_HEADERS, id);
-  if (rowIndex < 0) throw new Error('Item not found: ' + id);
+  if (rowIndex < 0) return true;
   sheet.deleteRow(rowIndex);
   return true;
 }
@@ -146,7 +173,7 @@ function deleteDropdown_(kind, id) {
 // ---------- Helpers ----------
 
 function ensureSheets_() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = ss_();
   ensureSheetWithHeaders_(ss, SHEETS.tasks, TASK_HEADERS);
   ensureSheetWithHeaders_(ss, SHEETS.projects, DROPDOWN_HEADERS);
   ensureSheetWithHeaders_(ss, SHEETS.labels, DROPDOWN_HEADERS);
@@ -168,7 +195,7 @@ function ensureSheetWithHeaders_(ss, name, headers) {
 }
 
 function sheet_(name) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(name);
+  const sh = ss_().getSheetByName(name);
   if (!sh) throw new Error('Missing sheet: ' + name);
   return sh;
 }
