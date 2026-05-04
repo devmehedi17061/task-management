@@ -8,11 +8,16 @@ import type {
 } from '../lib/types';
 import { localApi } from './localApi';
 
-const ENDPOINT = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
-// In dev, route through Vite's proxy at /gas (configured in vite.config.ts) to
-// avoid CORS/redirect issues with script.google.com → script.googleusercontent.com.
-const USE_PROXY = import.meta.env.DEV;
-const REMOTE_CONFIGURED = USE_PROXY ? Boolean(ENDPOINT) : Boolean(ENDPOINT);
+// In dev, the Vite proxy forwards /api → http://localhost:4000 (Express).
+// In a production build the same /api path needs a real backend behind it
+// (e.g. Vercel serverless rewrite). Set VITE_API_BASE=/api at build time to
+// enable remote mode in production. The GitHub Pages build leaves it unset,
+// so the deployed site runs in local-storage-only mode.
+const API_BASE: string = import.meta.env.DEV
+  ? '/api'
+  : ((import.meta.env.VITE_API_BASE as string | undefined) ?? '');
+
+const REMOTE_CONFIGURED = Boolean(API_BASE);
 
 // ---------- Mode tracking ----------
 
@@ -22,7 +27,7 @@ type ModeListener = (mode: ApiMode, reason?: string) => void;
 let currentMode: ApiMode = REMOTE_CONFIGURED ? 'remote' : 'local';
 let lastReason: string | undefined = REMOTE_CONFIGURED
   ? undefined
-  : 'No Apps Script URL configured.';
+  : 'No API server configured for this build.';
 const listeners = new Set<ModeListener>();
 
 export function getApiMode(): ApiMode {
@@ -44,23 +49,14 @@ function setMode(mode: ApiMode, reason?: string) {
   listeners.forEach((fn) => fn(mode, reason));
 }
 
-// ---------- Remote (Apps Script) ----------
+// ---------- Remote (Node API) ----------
 
-function endpoint(): string {
-  if (USE_PROXY) return '/gas';
-  if (!ENDPOINT) {
-    throw new Error('VITE_APPS_SCRIPT_URL is not set.');
-  }
-  return ENDPOINT;
-}
-
-// Transport errors mean we couldn't reach Apps Script at all (network down,
-// auth wall, redirect to sign-in, malformed response). Falling back to local
-// mode is the right move.
+// Transport errors mean the API server is unreachable (offline, dev server
+// not running, network down). Falling back to local mode is the right move.
 //
 // Remote app errors mean the server responded but rejected this specific
-// operation (e.g. "Task not found"). The connection is healthy — we should
-// surface the error to the caller and resync, NOT switch to local mode.
+// operation (e.g. "Task not found"). The connection is healthy — surface the
+// error to the caller and resync, NOT switch to local mode.
 class TransportError extends Error {
   constructor(message: string) {
     super(message);
@@ -76,22 +72,22 @@ class RemoteAppError extends Error {
 }
 
 async function parseResponse<T>(res: Response): Promise<T> {
-  const text = await res.text();
-  const trimmed = text.trim();
-  if (trimmed.startsWith('<')) {
-    throw new TransportError(
-      'Apps Script returned an HTML page instead of JSON. The deployment likely requires sign-in (Who has access ≠ Anyone), or the script has not been authorized.',
-    );
-  }
-  if (!res.ok) throw new TransportError(`Request failed: ${res.status}`);
   let json: unknown;
   try {
-    json = JSON.parse(text);
+    json = await res.json();
   } catch {
-    throw new TransportError(`Could not parse response as JSON: ${trimmed.slice(0, 120)}`);
+    throw new TransportError(`Could not parse response as JSON (status ${res.status})`);
   }
-  if (json && typeof json === 'object' && 'error' in json && (json as { error?: string }).error) {
-    throw new RemoteAppError(String((json as { error: string }).error));
+  if (!res.ok) {
+    const msg =
+      json && typeof json === 'object' && 'error' in json && (json as { error?: string }).error
+        ? String((json as { error: string }).error)
+        : `Request failed: ${res.status}`;
+    // 4xx with a JSON error body = app-level rejection (validation, not found).
+    // 5xx = server reachable but broken — surface it as a transport-style error
+    // so the UI falls back to local mode rather than masking infra problems.
+    if (res.status >= 400 && res.status < 500) throw new RemoteAppError(msg);
+    throw new TransportError(msg);
   }
   return json as T;
 }
@@ -100,42 +96,46 @@ async function fetchOrTransportError(input: string, init: RequestInit): Promise<
   try {
     return await fetch(input, init);
   } catch (err) {
-    // fetch only rejects on network-level failures (offline, DNS, CORS).
     throw new TransportError(err instanceof Error ? err.message : String(err));
   }
 }
 
-async function getJson<T>(params: Record<string, string>): Promise<T> {
-  const url = new URL(endpoint(), window.location.origin);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const res = await fetchOrTransportError(url.toString(), { method: 'GET', redirect: 'follow' });
+function url(path: string): string {
+  if (!REMOTE_CONFIGURED) {
+    throw new Error('API base is not configured for this build.');
+  }
+  return `${API_BASE}${path}`;
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetchOrTransportError(url(path), { method: 'GET' });
   return parseResponse<T>(res);
 }
 
-async function postJson<T>(body: Record<string, unknown>): Promise<T> {
-  const url = new URL(endpoint(), window.location.origin).toString();
-  const res = await fetchOrTransportError(url, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(body),
-  });
+async function sendJson<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  };
+  const res = await fetchOrTransportError(url(path), init);
   return parseResponse<T>(res);
 }
 
 const remoteApi = {
-  bootstrap: () => getJson<BootstrapResponse>({ action: 'bootstrap' }),
+  bootstrap: () => getJson<BootstrapResponse>('/bootstrap'),
   createTask: (task: TaskInput) =>
-    postJson<{ task: Task }>({ action: 'createTask', task }).then((r) => r.task),
+    sendJson<{ task: Task }>('POST', '/tasks', task).then((r) => r.task),
   updateTask: (id: string, patch: Partial<TaskInput>) =>
-    postJson<{ task: Task }>({ action: 'updateTask', id, patch }).then((r) => r.task),
+    sendJson<{ task: Task }>('PATCH', `/tasks/${encodeURIComponent(id)}`, patch).then((r) => r.task),
   updateStatus: (id: string, status: Status) =>
-    postJson<{ ok: true }>({ action: 'updateStatus', id, status }),
-  deleteTask: (id: string) => postJson<{ ok: true }>({ action: 'deleteTask', id }),
+    sendJson<{ ok: true }>('PATCH', `/tasks/${encodeURIComponent(id)}/status`, { status }),
+  deleteTask: (id: string) =>
+    sendJson<{ ok: true }>('DELETE', `/tasks/${encodeURIComponent(id)}`),
   addDropdown: (kind: DropdownKind, name: string) =>
-    postJson<DropdownItem>({ action: 'addDropdown', kind, name }),
+    sendJson<DropdownItem>('POST', `/dropdowns/${kind}`, { name }),
   deleteDropdown: (kind: DropdownKind, id: string) =>
-    postJson<{ ok: true }>({ action: 'deleteDropdown', kind, id }),
+    sendJson<{ ok: true }>('DELETE', `/dropdowns/${kind}/${encodeURIComponent(id)}`),
 };
 
 // ---------- Public API: try remote, fall back to local ----------
@@ -150,7 +150,7 @@ async function withFallback<T>(
     if (currentMode !== 'remote') setMode('remote');
     return result;
   } catch (err) {
-    // App-level errors (e.g. validation, "not found") mean the sheet is
+    // App-level errors (e.g. validation, "not found") mean the server is
     // reachable — surface them to the caller instead of silently falling
     // back to local mode. The caller (a TanStack Query mutation) can then
     // refetch to resync the cache with the actual sheet state.

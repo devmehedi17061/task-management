@@ -6,3 +6,15 @@ dist
 *.log
 .DS_Store
 .vite
+
+# Server-specific
+server/node_modules
+server/credentials/sa.json
+server/credentials/*.json
+server/.env
+server/dist
+
+# Client-specific
+client/node_modules
+client/dist
+client/.vite

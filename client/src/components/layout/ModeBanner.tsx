@@ -41,7 +41,7 @@ export function ModeBanner() {
         <button
           onClick={handleRefresh}
           className="ml-auto inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-          aria-label="Refresh data from Google Sheet"
+          aria-label="Refresh data from API server"
         >
           <RefreshCw className="h-3 w-3" /> Refresh
         </button>
@@ -65,10 +65,11 @@ export function ModeBanner() {
           ) : null}
           {!isRemoteConfigured && (
             <div className="mt-0.5 text-amber-700">
-              Set <code className="rounded bg-amber-100 px-1 py-0.5">VITE_APPS_SCRIPT_URL</code> in
-              <code className="ml-1 rounded bg-amber-100 px-1 py-0.5">.env.local</code> and restart{' '}
-              <code className="rounded bg-amber-100 px-1 py-0.5">npm run dev</code> to connect to
-              your sheet.
+              Start the API server (<code className="rounded bg-amber-100 px-1 py-0.5">npm run dev</code>{' '}
+              from the repo root) and configure{' '}
+              <code className="rounded bg-amber-100 px-1 py-0.5">server/.env</code> with your{' '}
+              <code className="rounded bg-amber-100 px-1 py-0.5">SHEET_ID</code> to connect to your
+              Google Sheet.
             </div>
           )}
         </div>
@@ -78,7 +79,7 @@ export function ModeBanner() {
               onClick={handleRetry}
               className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
             >
-              <RefreshCw className="h-3 w-3" /> Retry sheet
+              <RefreshCw className="h-3 w-3" /> Retry API
             </button>
           )}
           <button
